@@ -18,9 +18,11 @@ TIMEFRAME = "5Min"
 RSI_PERIOD = 7
 BOLL_WINDOW = 25
 BOLL_STD_DEV = 1.5
-DAYS_BACK = 50
+DAYS_BACK = 5
 START_BALANCE = 10_000
 MARGIN = 2
+buy_rsi = 25
+sell_rsi = 80
 
 # Alpaca API client
 DATA_BASE_URL = "https://data.alpaca.markets/v2"
@@ -32,8 +34,8 @@ api = tradeapi.REST(
 )
 
 def run_backtest_trading_days(n_days: int = 5, **kwargs):
+    #theres 100% a library i can use for
     end = datetime.now(timezone.utc)
-    # Subtract n business days
     start = (end.tz_convert('US/Pacific') - BDay(n_days)).tz_convert(timezone.utc)
     raw = fetch_data(SYMBOL, start, end)
     ind = compute_indicators(raw, kwargs['boll_window'], kwargs['boll_std_dev'])
@@ -74,12 +76,12 @@ def compute_indicators(df: pd.DataFrame, boll_window=20, boll_std_dev=2) -> pd.D
 
 def generate_signals(
     df: pd.DataFrame,
-    buy_rsi_low=25, buy_rsi_high=50,
-    sell_rsi_low=60, sell_rsi_high=65,
     cooldown=0
 ) -> pd.Series:
-    buy = (df['rsi'] >= buy_rsi_low) & (df['rsi'] <= buy_rsi_high) & (df['close'] < df['lower'])
-    sell = (df['rsi'] >= sell_rsi_low) & (df['rsi'] <= sell_rsi_high) & (df['close'] < df['upper'])
+    # Buy when RSI <= buy_rsi and close < lower band
+    buy = (df['rsi'] <= buy_rsi) & (df['close'] < df['lower'])
+    # Sell when RSI >= sell_rsi and close > upper band
+    sell = (df['rsi'] >= sell_rsi) & (df['close'] > df['upper'])
     signals = pd.Series(0, index=df.index)
     last_trade_idx = -cooldown
     for i in range(len(df)):
@@ -94,12 +96,10 @@ def generate_signals(
     return signals
 
 def backtest(
-    df: pd.DataFrame,
-    buy_rsi_low=25, buy_rsi_high=50,
-    sell_rsi_low=60, sell_rsi_high=65
+    df: pd.DataFrame
 ) -> pd.DataFrame:
     df = df.copy()
-    df['signal'] = generate_signals(df, buy_rsi_low, buy_rsi_high, sell_rsi_low, sell_rsi_high)
+    df['signal'] = generate_signals(df)
     df['position'] = df['signal'].replace(0, pd.NA).ffill().fillna(0)
     df['returns'] = df['close'].pct_change()
     df['strategy_returns'] = df['position'].shift(1) * df['returns']
@@ -128,9 +128,9 @@ def summarize_trades(bt: pd.DataFrame) -> list:
         entry_upper = trades.loc[idx, 'upper']
         entry_lower = trades.loc[idx, 'lower']
         reason = (
-            f"RSI={entry_rsi:.2f} in [25, 50] and close<{entry_lower:.2f} (lower band)"
+            f"RSI={entry_rsi:.2f} <= {buy_rsi} and close<{entry_lower:.2f} (lower band)"
             if entry_type == 'BUY'
-            else f"RSI={entry_rsi:.2f} in [60, 65] and close<{entry_upper:.2f} (upper band)"
+            else f"RSI={entry_rsi:.2f} >= {sell_rsi} and close>{entry_upper:.2f} (upper band)"
         )
 
         # Find exit: first bar after entry where exit condition is met, or EOD
@@ -200,10 +200,8 @@ def plot_trade(bt, trade):
     plt.grid(True)
     plt.subplot(2, 1, 2)
     plt.plot(day_data.index, day_data['rsi'], label='RSI', color='purple')
-    plt.axhline(25, color='blue', linestyle='--', alpha=0.5)
-    plt.axhline(50, color='blue', linestyle='--', alpha=0.5)
-    plt.axhline(60, color='red', linestyle='--', alpha=0.5)
-    plt.axhline(65, color='red', linestyle='--', alpha=0.5)
+    plt.axhline(buy_rsi, color='blue', linestyle='--', alpha=0.5)
+    plt.axhline(sell_rsi, color='red', linestyle='--', alpha=0.5)
     plt.scatter(entry_time, bt.loc[entry_time, 'rsi'], color='green' if entry_type == 'BUY' else 'red', s=100, label='Entry RSI')
     plt.scatter(exit_time, bt.loc[exit_time, 'rsi'], color='orange', s=100, label='Exit RSI')
     plt.ylabel('RSI')
@@ -240,16 +238,17 @@ def plot_equity_curve(bt):
 
 if __name__ == '__main__':
     params = {
-        'buy_rsi_low': 25,
-        'buy_rsi_high': 30,
-        'sell_rsi_low': 60,
-        'sell_rsi_high': 65,
-        'boll_window': 25,
-        'boll_std_dev': 1.5,
+        'buy_rsi': buy_rsi,
+        'sell_rsi': sell_rsi,
+        'boll_window': BOLL_WINDOW,
+        'boll_std_dev': BOLL_STD_DEV,
         'margin': MARGIN,
         'start_balance': START_BALANCE
     }
-    bt = run_backtest_days(boll_window=params['boll_window'], boll_std_dev=params['boll_std_dev'])
+    bt = run_backtest_days(
+        boll_window=params['boll_window'],
+        boll_std_dev=params['boll_std_dev']
+    )
     if not bt.empty:
         bt['strategy_returns_margin'] = bt['strategy_returns'] * MARGIN
         bt['equity_curve_margin'] = START_BALANCE * (1 + bt['strategy_returns_margin']).cumprod()
@@ -275,4 +274,10 @@ if __name__ == '__main__':
             plot_trade(bt, trade)
         plot_equity_curve(bt)
     else:
+        print("No trades or results for these parameters.")
+        print("Daily summary exported to daily_trade_summary.csv")
+        save_run_summary(pl, max_drawdown, params)
+        for trade in trade_summaries:
+            plot_trade(bt, trade, buy_rsi=buy_rsi, sell_rsi=sell_rsi)
+        plot_equity_curve(bt)
         print("No trades or results for these parameters.")
