@@ -164,7 +164,8 @@ def summarize_trades(bt: pd.DataFrame) -> list:
         })
     return trade_summaries
 
-def save_run_summary(pl, max_drawdown, params, filename='run_summaries.csv'):
+def save_run_summary(pl, max_drawdown, params, filename='summaries/run_summaries.csv'):
+    os.makedirs('summaries', exist_ok=True)
     summary_data = {
         'datetime': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
         **params,
@@ -249,6 +250,7 @@ if __name__ == '__main__':
         boll_window=params['boll_window'],
         boll_std_dev=params['boll_std_dev']
     )
+    os.makedirs('summaries', exist_ok=True)
     if not bt.empty:
         bt['strategy_returns_margin'] = bt['strategy_returns'] * MARGIN
         bt['equity_curve_margin'] = START_BALANCE * (1 + bt['strategy_returns_margin']).cumprod()
@@ -265,10 +267,10 @@ if __name__ == '__main__':
         )
         print("\nDaily Trade Summary:")
         print(daily_summary)
-        trade_summary_df.to_csv('trade_details.csv', index=False)
-        daily_summary.to_csv('daily_trade_summary.csv')
-        print("Trade details exported to trade_details.csv")
-        print("Daily summary exported to daily_trade_summary.csv")
+        trade_summary_df.to_csv('summaries/trade_details.csv', index=False)
+        daily_summary.to_csv('summaries/daily_trade_summary.csv')
+        print("Trade details exported to summaries/trade_details.csv")
+        print("Daily summary exported to summaries/daily_trade_summary.csv")
         save_run_summary(pl, max_drawdown, params)
         for trade in trade_summaries:
             plot_trade(bt, trade)
@@ -276,6 +278,9 @@ if __name__ == '__main__':
     else:
         print("No trades or results for these parameters.")
         print("Daily summary exported to daily_trade_summary.csv")
+        pl = 0.0
+        max_drawdown = 0.0
+        trade_summaries = []
         save_run_summary(pl, max_drawdown, params)
         for trade in trade_summaries:
             plot_trade(bt, trade, buy_rsi=buy_rsi, sell_rsi=sell_rsi)
